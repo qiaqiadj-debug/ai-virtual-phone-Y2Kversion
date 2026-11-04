@@ -47,6 +47,11 @@ type VoiceCallScreenProps = {
     initiator?: "user" | "character";
 };
 
+const CALL_SILENCE_FOLLOW_UP_MS = 60_000;
+const CALL_SILENCE_FOLLOW_UP_MAX = 3;
+const CALL_SILENCE_FOLLOW_UP_CUE =
+  "[通话中对方已经沉默约一分钟，没有说话。请用口语自然地追一句，接着刚才的话题，不要重复上一句，也不要提及这条提示。]";
+
 function stripBilingualForSpeech(text: string): string {
     return text
         .split("\n")
@@ -86,6 +91,16 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
     const timerRef = useRef<NodeJS.Timeout | null>(null);
     const callStartRef = useRef<number>(0);
     const stateRef = useRef<string>("CONNECTING");
+        const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const silenceFollowUpsRef = useRef(0);
+    const silenceEligibleRef = useRef(false);
+
+    const clearSilenceFollowUp = useCallback(() => {
+        if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+    }, []);
     const interimTextRef = useRef<string>("");  // ref 版本，闭包安全
     const sttWarningShownRef = useRef(false);
     const subtitleScrollRef = useRef<HTMLDivElement>(null);
@@ -306,7 +321,9 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
 
     // ── Full conversation turn ──────────────────────
 
-    const runConversationTurn = useCallback(async (userText?: string) => {
+    const runConversationTurn = useCallback(async (userText?: string, options?: { followUp?: boolean }) => {
+    clearSilenceFollowUp();
+    if (!options?.followUp) silenceFollowUpsRef.current = 0;
         // 1. Save user message (skip for initial greeting)
         if (userText) {
             const userMsg = pushChatMessage({
@@ -323,10 +340,20 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         // 2. Switch to PROCESSING
         setCallState("PROCESSING");
         setInterimText("");
-
+const promptHistory = options?.followUp
+  ? [...messagesRef.current, {
+      id: `call-silence-${Date.now()}`,
+      sessionId: session.id,
+      role: "user" as const,
+      content: CALL_SILENCE_FOLLOW_UP_CUE,
+      status: "sent" as const,
+      createdAt: new Date().toISOString(),
+    }]
+  : messagesRef.current;
+        
         try {
             // 3. Generate AI response
-            const aiResponseText = flattenCompletionResult(await generateChatCompletion(session, messagesRef.current, {
+          const aiResponseText = flattenCompletionResult(await generateChatCompletion(session, promptHistory, {
                 appTags: ["chat", "voice"],
             }));
 
@@ -371,7 +398,8 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                 }
             }
 
-            if (stateRef.current !== "ENDED") {
+                       if (stateRef.current !== "ENDED") {
+                silenceEligibleRef.current = true;
                 setCallState("IDLE");
             }
         } catch (error: any) {
@@ -385,8 +413,30 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                 setCallState("IDLE");
             }
         }
-    }, [session, processAIResponse, playCallAudio]);
+    }, [session, processAIResponse, playCallAudio, clearSilenceFollowUp]);
+    const armSilenceFollowUp = useCallback(() => {
+        clearSilenceFollowUp();
+        if (!silenceEligibleRef.current) return;
+        if (silenceFollowUpsRef.current >= CALL_SILENCE_FOLLOW_UP_MAX) return;
+        silenceTimerRef.current = setTimeout(() => {
+            silenceTimerRef.current = null;
+            if (stateRef.current !== "IDLE") return;
+            if (silenceFollowUpsRef.current >= CALL_SILENCE_FOLLOW_UP_MAX) return;
+            silenceFollowUpsRef.current += 1;
+            stateRef.current = "PROCESSING";
+            void runConversationTurn(undefined, { followUp: true });
+        }, CALL_SILENCE_FOLLOW_UP_MS);
+    }, [clearSilenceFollowUp, runConversationTurn]);
 
+    // 角色说完回到通话中后静默 1 分钟再追发；开口、静音、挂断则取消
+    useEffect(() => {
+        if (callState === "IDLE" && !isMuted) {
+            armSilenceFollowUp();
+            return () => clearSilenceFollowUp();
+        }
+        clearSilenceFollowUp();
+    }, [callState, isMuted, armSilenceFollowUp, clearSilenceFollowUp]);
+    
     // ── Auto-listen: 进入 IDLE 自动开始监听 ────────
 
     const startListening = useCallback(() => {
@@ -408,8 +458,10 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                 interimTextRef.current = text;
                 // 有中间结果 → 切到 USER_SPEAKING
                 if (stateRef.current === "IDLE") {
-                    setCallState("USER_SPEAKING");
-                }
+    clearSilenceFollowUp();
+    stateRef.current = "USER_SPEAKING";
+    setCallState("USER_SPEAKING");
+}
             },
             onFinal: (text) => {
                 sttRef.current = null;
@@ -527,29 +579,35 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         runConversationTurn(text);
     }, [typedText, callState, runConversationTurn]);
 
-    // 按住说话（非 iOS）：按下录音，松开转写后走对话轮
-    const holdInput = useHoldToTalk({
-        characterId: session.contactId,
-        canStart: () => stateRef.current === "IDLE",
-        onRecordingStart: () => {
-            setInterimText("");
-            if (stateRef.current === "IDLE") setCallState("USER_SPEAKING");
-        },
-        onTranscribeStart: () => {
-            if (stateRef.current === "USER_SPEAKING") setCallState("PROCESSING");
-        },
-        onTranscript: (text) => { void runConversationTurn(text); },
-        onError: () => {
-            if (stateRef.current === "USER_SPEAKING" || stateRef.current === "PROCESSING") {
-                setCallState("IDLE");
-            }
-        },
-    });
+  // 按住说话（非 iOS）：按下录音，松开转写后走对话轮
+const holdInput = useHoldToTalk({
+    characterId: session.contactId,
+    canStart: () => stateRef.current === "IDLE",
+    onRecordingStart: () => {
+        clearSilenceFollowUp();
+        setInterimText("");
+        if (stateRef.current === "IDLE") {
+            stateRef.current = "USER_SPEAKING";
+            setCallState("USER_SPEAKING");
+        }
+    },
+    onTranscribeStart: () => {
+        if (stateRef.current === "USER_SPEAKING") setCallState("PROCESSING");
+    },
+    onTranscript: (text) => { void runConversationTurn(text); },
+    onError: () => {
+        if (stateRef.current === "USER_SPEAKING" || stateRef.current === "PROCESSING") {
+            setCallState("IDLE");
+        }
+    },
+});
 
     // ── Hangup ──────────────────────────────────────
 
-    const handleHangup = useCallback(() => {
-        setCallState("ENDED");
+   const handleHangup = useCallback(() => {
+    stateRef.current = "ENDED";
+    clearSilenceFollowUp();
+    setCallState("ENDED");
 
         // Stop any ongoing STT
         if (sttRef.current) {
@@ -578,7 +636,7 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
 
         // Delay then close
         setTimeout(() => onEnd(), 1500);
-    }, [session.id, callDuration, onEnd]);
+    }, [session.id, callDuration, onEnd, clearSilenceFollowUp]);
 
     // ── Render ──────────────────────────────────────
 
