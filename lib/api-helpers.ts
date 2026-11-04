@@ -90,6 +90,25 @@ export function isNativeGoogleApi(config: ApiConfig): boolean {
     return config.provider === "Google";
 }
 
+/** gpt-5 / o 系列只接受 max_completion_tokens，再带 max_tokens 会直接 400。 */
+export function prefersMaxCompletionTokens(model: string): boolean {
+    const leaf = model.trim().toLowerCase().split("/").pop() || "";
+    return leaf.startsWith("gpt-5") || /^o\d/.test(leaf);
+}
+
+export function applyOpenAIOutputLimit(body: Record<string, unknown>, model: string): void {
+    if (!prefersMaxCompletionTokens(model)) return;
+    if (typeof body.max_tokens === "number") {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
+    }
+    // 这些采样字段在推理模型上同样会被拒，去掉后走服务端默认值。
+    delete body.temperature;
+    delete body.top_p;
+    delete body.frequency_penalty;
+    delete body.presence_penalty;
+}
+
 /**
  * Send a simple LLM request (single user message) and return the text response.
  * Used by summarizer, moments-engine, and other non-chat LLM calls.
@@ -163,15 +182,17 @@ async function simpleLLMCallForIdentity(
                     ...(max_tokens ? { maxOutputTokens: max_tokens } : {}),
                 },
             });
-        } else {
+                } else {
             // OpenAI-compatible (all others including proxies/relays/custom)
             fetchUrl = buildChatCompletionsUrl(baseUrl);
-            body = JSON.stringify({
+            const openAIBody: Record<string, unknown> = {
                 model: config.defaultModel,
                 messages,
                 temperature,
                 ...(max_tokens ? { max_tokens } : {}),
-            });
+            };
+            applyOpenAIOutputLimit(openAIBody, config.defaultModel);
+            body = JSON.stringify(openAIBody);
         }
 
         const bodySize = body.length;
