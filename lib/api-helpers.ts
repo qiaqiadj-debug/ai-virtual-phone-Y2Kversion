@@ -93,7 +93,12 @@ export function isNativeGoogleApi(config: ApiConfig): boolean {
 /** gpt-5 / o 系列只接受 max_completion_tokens，再带 max_tokens 会直接 400。 */
 export function prefersMaxCompletionTokens(model: string): boolean {
     const leaf = model.trim().toLowerCase().split("/").pop() || "";
-    return leaf.startsWith("gpt-5") || /^o\d/.test(leaf);
+    // gpt-5 / gpt-6+ 以及 o 系列推理模型只接受 max_completion_tokens
+    if (leaf.startsWith("gpt-5") || leaf.startsWith("gpt-6") || leaf.startsWith("gpt-7")) return true;
+    if (/^o\d/.test(leaf)) return true;
+    // 兼容带点号的版本，如 gpt-6.1、gpt-5.6
+    if (/^gpt-[5-9](\.|$|-)/.test(leaf)) return true;
+    return false;
 }
 
 export function applyOpenAIOutputLimit(body: Record<string, unknown>, model: string): void {
