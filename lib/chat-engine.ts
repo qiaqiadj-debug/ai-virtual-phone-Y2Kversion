@@ -2097,14 +2097,14 @@ export async function buildChatPromptMessages(
         }), config.enableImageRecognition);
         await appendCurrentChatBackgroundContext(llmMessages, session, config.enableImageRecognition);
     }
-    if (resolvedAppId === "chat" && !session.isGroup && !isOfflineMode) {
-        llmMessages.push({
-            role: "system",
-            content: buildIMessageTapbackPromptInstruction() + "\n" + buildPokeUsagePrompt(promptHistory) + "\n" + avatarInstruction + "\n" + buildEchoPrompt() + "\n" + buildLovePrompt() + "\n" + buildFireworksPrompt()
-                + (promptProfile?.output === "plain_text" || promptProfile?.output === "json" ? "" : `\n${buildImageDeliveryChatPrompt()}`)
-                + `\n当前用户手机里给你的私聊备注是“${session.alias || character.name}”。你可以依自己的性格、关系变化和当下情境，自主决定偶尔修改这个备注；这不是用户一提就必须照做的功能，也不要频繁修改。真正决定修改时输出 [修改备注:新备注]，系统才会实际保存；禁止只用文字声称改好了却不输出协议。该动作只能修改你自己的私聊备注。`,
-        });
-    }
+   if (resolvedAppId === "chat" && !session.isGroup && !isOfflineMode) {
+    llmMessages.push({
+        role: "system",
+        content: buildPokeUsagePrompt(promptHistory) + "\n" + avatarInstruction + "\n" + buildEchoPrompt() + "\n" + buildLovePrompt() + "\n" + buildFireworksPrompt()
+            + (promptProfile?.output === "plain_text" || promptProfile?.output === "json" ? "" : `\n${buildImageDeliveryChatPrompt()}`)
+            + `\n当前用户手机里给你的私聊备注是“${session.alias || character.name}”。你可以依自己的性格、关系变化和当下情境，自主决定偶尔修改这个备注；这不是用户一提就必须照做的功能，也不要频繁修改。真正决定修改时输出 [修改备注:新备注]，系统才会实际保存；禁止只用文字声称改好了却不输出协议。该动作只能修改你自己的私聊备注。`,
+    });
+}
     if (promptProfile?.output === "plain_text") {
         llmMessages.push({
             role: "system",
