@@ -186,6 +186,12 @@ export function markAlbumRepliesRead(asset: PhotoAlbumAsset): void {
 }
 
 export function albumChatContext(characterId: string): string {
+  const MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000; // 只保留最近 3 天
+const cutoff = Date.now() - MAX_AGE_MS;
+const isRecent = (iso: string) => {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) && t >= cutoff;
+};
   const allAssets = collectPhotoAlbumAssets();
   reconcilePhotoAccess(allAssets, albumParticipants);
   const assets = allAssets.filter(a => albumParticipants(a).includes(characterId));
@@ -194,8 +200,8 @@ export function albumChatContext(characterId: string): string {
     const entries = thread.comments.slice(-2).map(c => ({ photoId: asset.id, description: asset.label.slice(0, 120), time: c.createdAt, author: c.authorName, kind: c.kind as string, text: c.text.slice(0, 200), status: c.authorId === "user" && (!thread.reviewed[characterId] || c.createdAt > thread.reviewed[characterId]) ? "新评论通知，尚未查看" : "已发布" }));
     if (asset.source.kind === "album" && thread.reviewed[characterId]) entries.unshift({ photoId: asset.id, description: asset.label, time: thread.reviewed[characterId], author: "用户", kind: "shared_photo", text: `共享专辑「${asset.uploadAlbum}」中的照片；你已查看，不能推断为共同经历。`, status: "已查看" });
     return entries;
-  }).sort((a,b) => a.time.localeCompare(b.time)).slice(-4);
-const known = photoSeenBy(characterId).sort((a,b) => b.seenAt.localeCompare(a.seenAt)).slice(0,4).map(s => ({ photoId: s.photoId, assetId: s.assetId, version: s.contentVersion, variantVersion: s.variantVersion, seenAt: s.seenAt, description: s.description.slice(0, 120), visual: s.visual?.slice(0, 200), completedActions: s.actionNotes?.slice(-1), access: s.access ? "当前仍有权限，动作前需核对当前版本" : "权限已撤回或照片已移除；只记得曾看过的版本，不能取图或知道后续变化" }));
+  }).filter(e => isRecent(e.time)).sort((a,b) => a.time.localeCompare(b.time)).slice(-4);
+const known = photoSeenBy(characterId).filter(s => isRecent(s.seenAt)).sort((a,b) => b.seenAt.localeCompare(a.seenAt)).slice(0,4).map(s => ({ photoId: s.photoId, assetId: s.assetId, version: s.contentVersion, variantVersion: s.variantVersion, seenAt: s.seenAt, description: s.description.slice(0, 120), visual: s.visual?.slice(0, 200), completedActions: s.actionNotes?.slice(-1), access: s.access ? "当前仍有权限，动作前需核对当前版本" : "权限已撤回或照片已移除；只记得曾看过的版本，不能取图或知道后续变化" }));
   const factRecords = photoFactContext(characterId);
   if (!updates.length && !known.length && !factRecords) return "";
   const facts = factRecords + '\n以上相册资料只是可选背景，不是待办或当前话题。优先回应用户当前聊天；无关时不要主动复述照片、心语或提醒。未展示的旧照片不等于不存在，不确定指哪张就询问，不要猜测。';
