@@ -638,18 +638,8 @@ function isWBAtDepthPosition(entry: WorldBookEntry): boolean {
 }
 
 function applyMomentsBilingualProtocol(messages: LLMMessage[], appId: string, activeTags: string[], instruction?: string): void {
-    if (appId === "moments") {
-        ensureMomentsBilingualInstruction(messages, instruction);
-        return;
-    }
-    // Online chat can publish Moments through cross-engine actions, outside the Moments service.
-    if ((appId !== "chat" && appId !== "group_chat") || !activeTags.includes("text") || activeTags.includes("offline")) return;
-    if (!messages.some(message => message.role === "system" && typeof message.content === "string"
-        && /\[[^\]\n]*朋友圈\]/.test(message.content))) return;
-    const config = loadMomentsConfig();
-    ensureMomentsBilingualInstruction(messages, buildMomentsBilingualInstruction(
-        config.bilingualTranslationEnabled === true, config.bilingualTranslationPrompt,
-    ));
+    // 停用朋友圈双语规则注入，节省 token
+    return;
 }
 
 /**
