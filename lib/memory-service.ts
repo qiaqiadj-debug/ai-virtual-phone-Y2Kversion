@@ -11,8 +11,9 @@ import { estimateTokens } from "./token-counter";
  * Retrieve relevant long-term memories for prompt injection.
  * Strategy:
  *   1. Total tokens <= longTermTokenBudget → return all
- *   2. Over budget + embedding API configured → vector-rank, fill until budget
- *   3. Over budget + no embedding → time-sorted (newest first), fill until budget
+ *   2. Otherwise: reserve ~35% budget for most recent long-term memories
+ *      + fill remaining budget with vector retrieval (hybrid score + threshold)
+ *   3. Fallback to newest-first if no embedding available
  * Embedding API is resolved from auxiliary binding (global, not per-character).
  */
 export async function retrieveMemoriesForPrompt(
@@ -24,40 +25,63 @@ export async function retrieveMemoriesForPrompt(
     if (longTermEntries.length === 0 || !currentContext.trim()) return [];
 
     const budget = config.longTermTokenBudget;
+    const recentReserveRatio = 0.35;
+    const recentBudget = Math.floor(budget * recentReserveRatio);
+    const retrieveBudget = budget - recentBudget;
 
-    // Calculate total tokens for all entries
-    let totalTokens = 0;
-    for (const entry of longTermEntries) {
-        totalTokens += estimateTokens(entry.content) + 4;
-    }
+    // Always take most recent long-term memories first
+    const byTime = [...longTermEntries].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    const recentOnes = fillByBudget(byTime, recentBudget);
+    const recentIds = new Set(recentOnes.map(e => e.id));
 
-    // Strategy 1: all fit within budget → return all
-    if (totalTokens <= budget) {
-        return longTermEntries;
-    }
+    let retrieved: MemoryEntry[] = [];
 
-    // Strategy 2: vector recall enabled + embedding API configured → vector search, fill by relevance
-    const embeddingApiConfig = config.vectorRecallEnabled ? resolveAuxiliaryApiConfig("embeddingApiConfigId") : null;
+    // Vector retrieval for the remaining budget
+    const embeddingApiConfig = config.vectorRecallEnabled
+        ? resolveAuxiliaryApiConfig("embeddingApiConfigId")
+        : null;
+
     if (embeddingApiConfig && resolveEmbeddingModel(embeddingApiConfig)) {
         const queryEmbedding = await generateEmbedding(currentContext, embeddingApiConfig);
         if (queryEmbedding) {
-            const withEmbeddings = longTermEntries.filter(m => m.embedding && m.embedding.length > 0);
-            if (withEmbeddings.length > 0) {
-                const scored = withEmbeddings.map(entry => ({
-                    entry,
-                    score: cosineSimilarity(queryEmbedding, entry.embedding!),
-                }));
-                scored.sort((a, b) => b.score - a.score);
-                return fillByBudget(scored.map(s => s.entry), budget);
+            const candidates = longTermEntries.filter(
+                m => m.embedding && m.embedding.length > 0 && !recentIds.has(m.id)
+            );
+
+            if (candidates.length > 0) {
+                const scored = candidates.map(entry => {
+                    const sim = cosineSimilarity(queryEmbedding, entry.embedding!);
+                    const ageHours = (Date.now() - new Date(entry.createdAt).getTime()) / 36e5;
+                    const recencyBoost = Math.max(0, 1 - ageHours / (24 * 30)); // gentle decay over ~30 days
+                    const finalScore = sim * 0.85 + recencyBoost * 0.15;
+                    return { entry, score: finalScore, sim };
+                });
+
+                const filtered = scored
+                    .filter(s => s.sim > 0.25)
+                    .sort((a, b) => b.score - a.score);
+
+                retrieved = fillByBudget(filtered.map(s => s.entry), retrieveBudget);
             }
         }
     }
 
-    // Strategy 3: no embedding support → newest first, fill by budget
-    const sorted = [...longTermEntries].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-    return fillByBudget(sorted, budget);
+    // Merge: recent first, then retrieved
+    const merged = [...recentOnes, ...retrieved];
+
+    // If still under budget, fill with more recent ones
+    const used = merged.reduce((sum, e) => sum + estimateTokens(e.content) + 4, 0);
+    if (used < budget) {
+        const more = fillByBudget(
+            byTime.filter(e => !merged.some(m => m.id === e.id)),
+            budget - used
+        );
+        merged.push(...more);
+    }
+
+    return merged;
 }
 
 export async function retrieveCoreMemoriesForPrompt(
