@@ -1,4 +1,5 @@
 "use client";
+import { CleanChatExportButton } from "./export-clean-chat-button";
 import "@/styles/chat-settings.css";
 import { BubbleColorSettings } from "./bubble-color-settings";
 import { resolveChatBeautyPreset } from "@/lib/chat-beauty-preset";
@@ -1823,9 +1824,12 @@ export function ChatSettingsPanel({
                                 保存并启用
                             </button>
                         </div>
-                    </PageShell>
-                </div>
-            )}
+                    <div style={{ padding: "16px" }}>
+            <CleanChatExportButton />
+          </div>
         </PageShell>
-    );
+      </div>
+    )}
+  </PageShell>
+);
 }
