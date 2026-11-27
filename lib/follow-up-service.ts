@@ -626,14 +626,33 @@ async function fireIdleReconnect(rule: IdleReconnectRule, lastUserAt: number) {
         backgroundGeneratingSessions.add(session.id);
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
 
+        // 表达纪律：先让角色判断是否真的想说话
+        const heartbeatCue = {
+            id: `heartbeat-${Date.now()}`,
+            sessionId: session.id,
+            role: "system" as const,
+            content: `[heartbeat] 现在是你主动出现的机会（已沉默约 ${elapsedMinutes} 分钟）。先判断：此刻你真的想说话吗？\n- 想说：正常回复一条自然的消息\n- 不想说：只回复 [pass]，不要输出其他内容`,
+            status: "sent" as const,
+            createdAt: new Date().toISOString(),
+        };
+        const messagesWithCue = [...latestMessages, heartbeatCue];
+
         const rounds = await generateBackgroundCompletionRounds(
             session,
-            latestMessages,
+            messagesWithCue,
             {
                 appTags: ["chat", "text", "idle_wake"],
                 timedWakeElapsedMinutes: elapsedMinutes,
             },
         );
+
+        // 检查是否选择 pass
+        const allText = rounds.map(r => r.text).join("\n").trim();
+        if (/^\[pass\]$/i.test(allText) || allText === "" || allText.toLowerCase() === "pass") {
+            console.log("[IdleReconnect] Character chose to pass");
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+            return;
+        }
 
         if (isBackgroundGenerationCancelled(session.id)) {
             const intervalMs = Math.max(1, rule.intervalMinutes) * 60_000;
