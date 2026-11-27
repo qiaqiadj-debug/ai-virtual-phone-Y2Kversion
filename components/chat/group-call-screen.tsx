@@ -22,6 +22,8 @@ import { startIncomingCallVibration } from "@/lib/call-vibration";
 
 // ── Types ───────────────────────────────────────────
 
+const CALL_USER_IDLE_HANGUP_MS = 10 * 60 * 1000; // 10 minutes no user input → auto hangup
+
 type CallState =
     | "CONNECTING"
     | "IDLE"
@@ -90,6 +92,7 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
     const messagesRef = useRef<ChatMessage[]>([]);
     const userNameRef = useRef<string>("你");
     const userAvatarRef = useRef<string | null>(null);
+    const userIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const isVideo = type === "video";
     const callTypeLabel = isVideo ? "视频通话" : "语音通话";
@@ -194,8 +197,9 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
     useEffect(() => {
         if (callState !== "CONNECTING" && !hasConnectedRef.current) {
             hasConnectedRef.current = true;
+            resetUserIdleTimer();
         }
-    }, [callState]);
+    }, [callState, resetUserIdleTimer]);
 
     const formatTime = (seconds: number) => {
         const m = Math.floor(seconds / 60);
@@ -317,11 +321,13 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
 
         const stt = createSTTSession({
             onInterim: (text) => {
+                resetUserIdleTimer();
                 setInterimText(text);
                 interimTextRef.current = text;
                 if (stateRef.current === "IDLE") setCallState("USER_SPEAKING");
             },
             onFinal: (text) => {
+                resetUserIdleTimer();
                 sttRef.current = null;
                 if (text.trim()) runConversationTurn(text.trim());
                 else { setInterimText(""); setCallState("IDLE"); }
@@ -396,6 +402,7 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
     const handleTextSubmit = useCallback(() => {
         const text = typedText.trim();
         if (!text || callState !== "IDLE") return;
+        resetUserIdleTimer();
         if (sttRef.current) { sttRef.current.abort(); sttRef.current = null; }
         setTypedText("");
         runConversationTurn(text);
@@ -421,8 +428,20 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
         },
     });
 
+    // ── User idle auto-hangup ───────────────────────
+    const resetUserIdleTimer = useCallback(() => {
+        if (userIdleTimerRef.current) clearTimeout(userIdleTimerRef.current);
+        userIdleTimerRef.current = setTimeout(() => {
+            if (stateRef.current !== "ENDED" && stateRef.current !== "CONNECTING") {
+                console.log("[GroupCall] 10min no user input, auto hangup");
+                handleHangup();
+            }
+        }, CALL_USER_IDLE_HANGUP_MS);
+    }, []);
+
     // ── Hangup ──────────────────────────────────────
     const handleHangup = useCallback(() => {
+        if (userIdleTimerRef.current) { clearTimeout(userIdleTimerRef.current); userIdleTimerRef.current = null; }
         setCallState("ENDED");
         if (sttRef.current) { sttRef.current.abort(); sttRef.current = null; }
         if (audioAbortRef.current) { audioAbortRef.current(); audioAbortRef.current = null; }
