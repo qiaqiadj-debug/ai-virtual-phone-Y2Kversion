@@ -48,6 +48,7 @@ type VoiceCallScreenProps = {
 };
 
 const CALL_SILENCE_FOLLOW_UP_MS = 60_000;
+const CALL_USER_IDLE_HANGUP_MS = 10 * 60 * 1000; // 10 minutes no user input → auto hangup
 const CALL_SILENCE_FOLLOW_UP_MAX = 3;
 const CALL_SILENCE_FOLLOW_UP_CUE =
   "[通话中对方已经沉默约一分钟，没有说话。请用口语自然地追一句，接着刚才的话题，不要重复上一句，也不要提及这条提示。]";
@@ -94,12 +95,23 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const silenceFollowUpsRef = useRef(0);
     const silenceEligibleRef = useRef(false);
+    const userIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const clearSilenceFollowUp = useCallback(() => {
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = null;
         }
+    }, []);
+
+    const resetUserIdleTimer = useCallback(() => {
+        if (userIdleTimerRef.current) clearTimeout(userIdleTimerRef.current);
+        userIdleTimerRef.current = setTimeout(() => {
+            if (stateRef.current !== "ENDED" && stateRef.current !== "CONNECTING") {
+                console.log("[VoiceCall] 10min no user input, auto hangup");
+                handleHangup();
+            }
+        }, CALL_USER_IDLE_HANGUP_MS);
     }, []);
     const interimTextRef = useRef<string>("");  // ref 版本，闭包安全
     const sttWarningShownRef = useRef(false);
@@ -241,12 +253,13 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Track first connect
+    // Track first connect + start idle timer
     useEffect(() => {
         if (callState !== "CONNECTING" && !hasConnectedRef.current) {
             hasConnectedRef.current = true;
+            resetUserIdleTimer();
         }
-    }, [callState]);
+    }, [callState, resetUserIdleTimer]);
 
     // ── Format time MM:SS ───────────────────────────
 
@@ -454,6 +467,7 @@ const promptHistory = options?.followUp
 
         const stt = createSTTSession({
             onInterim: (text) => {
+                resetUserIdleTimer();
                 setInterimText(text);
                 interimTextRef.current = text;
                 // 有中间结果 → 切到 USER_SPEAKING
@@ -464,6 +478,7 @@ const promptHistory = options?.followUp
 }
             },
             onFinal: (text) => {
+                resetUserIdleTimer();
                 sttRef.current = null;
                 if (text.trim()) {
                     runConversationTurn(text.trim());
@@ -577,6 +592,7 @@ const promptHistory = options?.followUp
     const handleTextSubmit = useCallback(() => {
         const text = typedText.trim();
         if (!text || callState !== "IDLE") return;
+        resetUserIdleTimer();
         if (sttRef.current) {
             sttRef.current.abort();
             sttRef.current = null;
@@ -613,6 +629,7 @@ const holdInput = useHoldToTalk({
    const handleHangup = useCallback(() => {
     stateRef.current = "ENDED";
     clearSilenceFollowUp();
+    if (userIdleTimerRef.current) { clearTimeout(userIdleTimerRef.current); userIdleTimerRef.current = null; }
     setCallState("ENDED");
 
         // Stop any ongoing STT
