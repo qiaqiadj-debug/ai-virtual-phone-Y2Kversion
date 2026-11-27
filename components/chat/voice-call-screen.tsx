@@ -521,6 +521,7 @@ const promptHistory = options?.followUp
     }, [androidTextInputOnly, holdToTalk, runConversationTurn, session.contactId, showSttCompatibilityWarning]);
 
     // IDLE 时自动开启监听（按住说话模式无自动监听，识别只在按住期间发生）
+    // iOS 上 Web Speech 在 Web Audio 播放结束后经常假死，需要更长延迟 + 强制 abort 旧会话再重启
     useEffect(() => {
         if (holdToTalk) return;
         if (inputMode === "text" && sttRef.current) {
@@ -529,12 +530,17 @@ const promptHistory = options?.followUp
             setInterimText("");
         }
         if (!androidTextInputOnly && inputMode === "voice" && callState === "IDLE" && !isMuted) {
-            // 短暂延迟让 UI 过渡完成
+            const delay = iosDevice ? 800 : 500;
             const timer = setTimeout(() => {
                 if (stateRef.current === "IDLE") {
+                    // 强制清掉可能残留的会话
+                    if (sttRef.current) {
+                        sttRef.current.abort();
+                        sttRef.current = null;
+                    }
                     startListening();
                 }
-            }, 500);
+            }, delay);
             return () => clearTimeout(timer);
         }
         // 静音时停止监听
