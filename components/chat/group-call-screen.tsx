@@ -360,9 +360,16 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
             setInterimText("");
         }
         if (!androidTextInputOnly && inputMode === "voice" && callState === "IDLE" && !isMuted) {
+            const delay = iosDevice ? 800 : 500;
             const timer = setTimeout(() => {
-                if (stateRef.current === "IDLE") startListening();
-            }, 500);
+                if (stateRef.current === "IDLE") {
+                    if (sttRef.current) {
+                        sttRef.current.abort();
+                        sttRef.current = null;
+                    }
+                    startListening();
+                }
+            }, delay);
             return () => clearTimeout(timer);
         }
         if (isMuted && sttRef.current) { sttRef.current.abort(); sttRef.current = null; }
