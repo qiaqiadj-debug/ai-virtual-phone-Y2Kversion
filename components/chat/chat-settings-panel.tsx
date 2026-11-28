@@ -1255,7 +1255,13 @@ export function ChatSettingsPanel({
                                     <span className="menu-desc">上帝操作：无视群规则直接拿回群主</span>
                                 </div>
                             </button>
-                        )}</div></section>}<section className="chat-settings-section chat-settings-danger"><h2>会话管理</h2><div className="menu-group">{!session.isGroup && (
+                        )}</div></section>}<section className="chat-settings-section">
+  <h2>数据导出</h2>
+  <div className="menu-group" style={{ padding: "8px 0" }}>
+    <CleanChatExportButton />
+  </div>
+</section>
+<section className="chat-settings-section chat-settings-danger"><h2>会话管理</h2><div className="menu-group">{!session.isGroup && (
                     <button className="menu-item" onClick={() => setShowConfirmDelete(true)}>
                         <ChatInfoIcon icon={UserMinus} color="var(--c-danger)" />
                         <div className="menu-label-group"><span className="menu-label menu-label-danger">删除好友</span></div>
@@ -1824,9 +1830,7 @@ export function ChatSettingsPanel({
                                 保存并启用
                             </button>
                         </div>
-                    <div style={{ padding: "16px" }}>
-            <CleanChatExportButton />
-          </div>
+
         </PageShell>
       </div>
     )}
